@@ -343,12 +343,12 @@ class DNSQuery {
             return null;
         }
 
-        const queries: ProvableAnswer<packet.Answer>[] = []
+        const queries: ProvableAnswer<Extract<packet.Answer, {type:T|packet.Rcname['type']}>>[] = []
         for (const answer of answers) {
             const subquery = await this.queryWithProof(answer.type, answer.name);
             queries.push(subquery);
         }
-        return queries as any;
+        return queries;
     }
 
     async verifyRRSet<T extends packet.Answer>(answers: T[], sigs: packet.Rrsig[]): Promise<ProvableAnswer<T>> {
