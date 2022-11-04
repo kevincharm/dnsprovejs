@@ -98,7 +98,12 @@ declare module 'dns-packet' {
     data: Buffer[]
   }
 
-  type Answer = A|Dnskey|Ds|Opt|Rrsig|Rtxt
+  interface Rcname extends AnswerBase {
+    type: 'CNAME'
+    data: string
+  }
+
+  type Answer = A|Dnskey|Ds|Opt|Rrsig|Rtxt|Rcname
 
   interface Encodable<T> {
     decode: decoder<T>

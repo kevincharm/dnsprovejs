@@ -274,9 +274,36 @@ export class DNSProver {
     async queryWithProof<T extends packet.Answer['type']>(qtype: T, qname: string): Promise<ProvableAnswer<Extract<packet.Answer,{type: T}>|null>> {
         return (new DNSQuery(this)).queryWithProof(qtype, qname);
     }
+
+    async queryWithProofFollowCnames<T extends packet.Answer['type']>(qtype: T, qname: string): Promise<ProvableAnswer<packet.Answer>[]> {
+        return (new DNSQuery(this)).queryWithProofFollowCnames(qtype, qname);
+    }
 }
 
 type AnswerSet = {[T in packet.Answer['type']]: ProvableAnswer<Extract<packet.Answer, {type: T}>>};
+
+function resolveAnswers<T extends packet.Answer['type']>(
+    answers: packet.Answer[],
+    qtype: T,
+    qnames: string[]
+): Extract<packet.Answer, {type: T}>[] {
+    // No CNAME -> find actual record(s) of qtype using previously resolved qname
+    return answers.filter(
+        (r): r is Extract<packet.Answer,{type: T}> => r.type === qtype && qnames.includes(r.name));
+}
+
+function resolveAnswersRecursively<T extends packet.Answer['type']>(
+    answers: packet.Answer[],
+    qtype: T,
+    qnames: string[]
+): Extract<packet.Answer, {type: T|packet.Rcname['type']}>[] {
+    const cname = answers.find((r): r is Extract<packet.Answer, {type: packet.Rcname['type']}> => r.type === 'CNAME' && qnames.includes(r.name));
+    if (cname) {
+        return [cname, ...resolveAnswersRecursively(answers, qtype, [cname.data])];
+    }
+    // No CNAME -> find actual record(s) of qtype using previously resolved qname
+    return resolveAnswers(answers, qtype, qnames) as any;
+}
 
 class DNSQuery {
     prover: DNSProver;
@@ -286,16 +313,18 @@ class DNSQuery {
         this.prover = prover;
     }
 
-    async queryWithProof<T extends packet.Answer['type']>(qtype: T, qname: string): Promise<ProvableAnswer<Extract<packet.Answer,{type: T}>|null>> {
+    async queryWithProof<T extends packet.Answer['type']>(qtype: T, qname: string): Promise<ProvableAnswer<Extract<packet.Answer,{type: T}>>> {
         const response = await this.dnsQuery(qtype.toString(), qname);
-        const answers = response.answers.filter(
-            (r): r is Extract<packet.Answer,{type: T}> => r.type === qtype && r.name === qname);
+        const answers = resolveAnswers(response.answers, qtype, [qname])
+            .filter((r): r is Extract<packet.Answer,{type: T}> => r.type === qtype);
         logger.info(`Found ${answers.length} ${qtype} records for ${qname}`);
         if(answers.length === 0) {
             return null;
         }
 
-        const sigs = response.answers.filter((r): r is packet.Rrsig => r.type === 'RRSIG' && r.name === qname && r.data.typeCovered === qtype);
+        const sigs = resolveAnswers(response.answers, 'RRSIG', [qname])
+            .filter((r): r is packet.Rrsig => r.type === 'RRSIG')
+            .filter((r) => r.data.typeCovered === qtype.toString() || r.data.typeCovered === 'CNAME');
         logger.info(`Found ${sigs.length} RRSIGs over ${qtype} RRSET`);
 
         // If the records are self-signed, verify with DS records
@@ -305,6 +334,21 @@ class DNSQuery {
         } else {
             return this.verifyRRSet(answers, sigs);
         }
+    }
+
+    async queryWithProofFollowCnames<T extends packet.Answer['type']>(qtype: T, qname: string): Promise<ProvableAnswer<Extract<packet.Answer,{type: T|packet.Rcname['type']}>>[]> {
+        const response = await this.dnsQuery(qtype.toString(), qname);
+        const answers = resolveAnswersRecursively(response.answers, qtype, [qname]);
+        if (answers.length === 0) {
+            return null;
+        }
+
+        const queries: ProvableAnswer<packet.Answer>[] = []
+        for (const answer of answers) {
+            const subquery = await this.queryWithProof(answer.type, answer.name);
+            queries.push(subquery);
+        }
+        return queries as any;
     }
 
     async verifyRRSet<T extends packet.Answer>(answers: T[], sigs: packet.Rrsig[]): Promise<ProvableAnswer<T>> {
