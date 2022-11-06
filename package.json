@@ -2,8 +2,7 @@
   "name": "@ensdomains/dnsprovejs",
   "version": "0.4.1",
   "description": "A library to generate chains of trust proving DNS records via DNSSEC",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "src/index.ts",
   "dependencies": {
     "dns-packet": "^5.2.1",
     "ethereumjs-util": "^7.0.7",
